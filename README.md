@@ -269,7 +269,9 @@ of the repository owner:
   translation layer, and the listener lifecycle;
 - the Client half (`lib/client.js`), including the settings page, its styles,
   and the English and Chinese copy;
-- the default system prompt, if the settings field is left empty;
+- the settings page's extra-system-prompt field and its empty default — the
+  endpoint deliberately injects nothing of its own, so a client's own system
+  message survives untouched;
 - this README, the plugin manifest, `cordis.patch.yml`, and `icon.svg`;
 - every code comment in every file.
 
