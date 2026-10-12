@@ -1,0 +1,8 @@
+# dsh-model-endpoint — profile layer.
+#
+# The `id` below is the profile entry id, and it is also the settings namespace
+# the endpoint's settings page reads and writes. Renaming it orphans any values
+# already saved under the old id, so leave it alone unless you mean to reset.
+- insert:
+    - id: model-endpoint
+      name: 'dsh-model-endpoint'

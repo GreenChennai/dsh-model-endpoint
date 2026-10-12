@@ -1,0 +1,4 @@
+{
+  "title": "Model Endpoint",
+  "description": "Publishes the model this profile uses as an OpenAI-compatible HTTP endpoint on a LAN or public address."
+}
