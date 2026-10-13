@@ -34,6 +34,7 @@ Also served, on the Harness web server rather than this endpoint:
 | `GET /plugins/model-endpoint` | The same status document, same-origin, for the settings page. |
 | `GET /plugins/model-endpoint/models` | The status document plus the reachable-model catalog. |
 | `GET /plugins/model-endpoint/efforts?provider=&model=` | The reasoning efforts that route declares, for the settings dropdown. |
+| `GET /plugins/model-endpoint/tools` | Every registered tool with its switch state, for the settings page. |
 
 ### Model resolution
 
@@ -78,9 +79,55 @@ carried with the terminal `finish_reason`.
 
 ### Tool calling
 
-`tools` and `tool_choice` are forwarded, tool calls come back on both the
-streaming and non-streaming paths, and `role: "tool"` messages are accepted on
-the way in. Function calling therefore works with clients that rely on it.
+Two different things are called "tool calling" here, and they compose.
+
+**Caller-supplied tools.** `tools` is forwarded to the model, tool calls come
+back on both the streaming and non-streaming paths, and `role: "tool"` messages
+are accepted on the way in. The endpoint never executes a tool it was handed by
+a request — those belong to the caller, and the call is returned with
+`finish_reason: "tool_calls"` for the caller to run. Function calling therefore
+works with clients that rely on it.
+
+**Borrowed tools.** The endpoint can also lend the model the tools *this
+Harness* has registered, run them itself, and feed the results back — a full
+model/tool round trip inside one request. That is real capability over this
+machine, so it is **off by default** and, once on, only the individual tools
+switched on are sent. See [Borrowed tools](#borrowed-tools).
+
+A request that supplies its own `tools` never receives borrowed ones. Mixing
+them would hand the caller back calls it cannot run.
+
+---
+
+## Borrowed tools
+
+Settings → **Model endpoint** → **Lend this profile's tools to the model**.
+
+When it is on, every tool the Harness has registered is listed by name with its
+own switch. Only switched-on tools are sent to the model. When the model calls
+one, the endpoint executes it through the Harness tool runtime, appends the
+result, and asks the model again — up to **Max tool rounds** (default `8`).
+A turn that hits the limit is cut off with `409 tool_round_limit` rather than
+being retried forever.
+
+**Granularity, stated honestly.** The switches are **per tool, not per plugin**.
+The Harness registry records a tool's name, description, and parameters; it does
+not record which plugin registered it, and the scope a tool is registered under
+is the calling agent's, not the plugin's. A per-plugin switch would therefore
+require guessing at attribution this plugin cannot observe. Per-tool is finer
+than per-plugin and fails closed, so that is what is offered.
+
+Some tools run code, read or write files, or reach the network. Switch on the
+ones you would be willing to run yourself for an unauthenticated caller — and if
+the listener is reachable beyond `127.0.0.1`, set an API key as well.
+
+```sh
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"auto","messages":[{"role":"user","content":"List the files in the workspace."}]}'
+```
+
+The model decides whether to call a borrowed tool; nothing forces it.
 
 ---
 
@@ -136,13 +183,22 @@ Settings → **Model endpoint**.
 | Bind address | `127.0.0.1` | `0.0.0.0` accepts connections on every interface. |
 | Port | `8787` | The port clients connect to. |
 | API key | empty | When set, clients send `Authorization: Bearer <key>`. |
-| Follow the selected model | on | Serve whatever is picked in chat or on the Models page. |
+| Follow the selected model | on | Serve whatever is picked in chat or on the Models page. While on, the fallback model dropdown is hidden because it is not what gets served. |
 | Fallback provider / model | empty | Used when not following the selection, or when nothing is selected. Chosen from a dropdown of the models this profile can actually reach. |
 | Reasoning effort | model default | Only applied when the served model declares it. The dropdown lists exactly the efforts the chosen fallback model declares, plus the model's own default. |
 | Extra system prompt | empty | Prepended only for requests that carry no system message of their own. |
 | Default max output tokens | `8192` | Applied when a request omits `max_tokens`. |
 | Request timeout (ms) | `600000` | Upper bound for one completion, including streaming. |
 | Allowed browser origin | `*` | Sent as `Access-Control-Allow-Origin`. |
+| Lend this profile's tools | off | Hand the model the Harness tools switched on below, and run them here. |
+| (per tool) | off | One switch per registered tool. Only tools that are on are sent. |
+| Max tool rounds | `8` | Model/tool round trips one request may take before it is cut off. |
+
+The **API key** row has a **Generate** button that fills the field with a fresh
+48-character key drawn from a 62-symbol alphabet with rejection sampling (about
+286 bits, no `+`/`/`/`=` to escape and no look-alike pairs). It only fills the
+field — press **Save** to apply it, and copy it out first, because this field is
+the only place it is stored.
 
 Every field is live: change one and the listener rebinds on its own. The status
 block above the fields shows the **actual** bound port and the addresses this
@@ -219,6 +275,7 @@ Errors use OpenAI's envelope:
 | 404 | `not_found` | No such route. |
 | 404 | `model_not_found` | The requested `model` is not routable. |
 | 405 | `method_not_allowed` | Wrong method for a known route. |
+| 409 | `tool_round_limit` | The model kept calling borrowed tools past **Max tool rounds**. |
 | 413 | `request_too_large` | Body above 8 MiB, or an oversized input. |
 | 429 | `rate_limit_exceeded` | Upstream provider rate limit. |
 | 429 | `insufficient_quota` | Upstream quota exhausted. |
@@ -277,7 +334,8 @@ of the repository owner:
 - the Host half (`lib/index.js`), including every request handler, the OpenAI
   translation layer, and the listener lifecycle;
 - the Client half (`lib/client.js`), including the settings page, its styles,
-  and the English and Chinese copy;
+  the capsule switches, the random-key generator, and the English and Chinese
+  copy;
 - the settings page's extra-system-prompt field and its empty default — the
   endpoint deliberately injects nothing of its own, so a client's own system
   message survives untouched;
@@ -288,7 +346,11 @@ It was written against DeepSeek Harness `0.2.0-rc.2` by reading that
 installation's own source, and verified live against a running profile: the
 listener binds, `/v1/models` enumerates the profile's providers,
 `/v1/chat/completions` streams real completions, and the settings page reads and
-writes through the settings service.
+writes through the settings service. The borrowed-tool loop was verified against
+a harness that drives the Host half with a fake tool registry, covering a tool
+that runs, a tool that fails, a call named only on a later delta, malformed
+arguments, a model loop that hits the round limit, and a caller-supplied tool
+that must never be mixed with a borrowed one.
 
 It is not copied from any existing plugin. It may still contain mistakes, and it
 is offered without warranty. Read it before you expose it to a network.
