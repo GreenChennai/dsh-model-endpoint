@@ -33,6 +33,7 @@ Also served, on the Harness web server rather than this endpoint:
 |---|---|
 | `GET /plugins/model-endpoint` | The same status document, same-origin, for the settings page. |
 | `GET /plugins/model-endpoint/models` | The status document plus the reachable-model catalog. |
+| `GET /plugins/model-endpoint/efforts?provider=&model=` | The reasoning efforts that route declares, for the settings dropdown. |
 
 ### Model resolution
 
@@ -57,6 +58,14 @@ names every candidate that failed and why.
 effort; otherwise the model's own default applies. This is why an unknown effort
 degrades quietly instead of failing the request. The setting on the plugin's page
 supplies a default for requests that omit the field.
+
+Both the fallback model and the reasoning effort are dropdowns, not free-text
+fields. They are filled from the same catalog the Models settings page reads, so
+what you can pick is exactly what this profile can route to, and the effort list
+belongs to the model you actually picked. A value already stored that is no
+longer offered — a provider that went offline, an effort its model stopped
+declaring — stays selectable and is labelled rather than being silently
+rewritten.
 
 ### Streaming
 
@@ -128,8 +137,8 @@ Settings → **Model endpoint**.
 | Port | `8787` | The port clients connect to. |
 | API key | empty | When set, clients send `Authorization: Bearer <key>`. |
 | Follow the selected model | on | Serve whatever is picked in chat or on the Models page. |
-| Fallback provider / model | empty | Used when not following the selection, or when nothing is selected. |
-| Reasoning effort | model default | Only applied when the served model declares it. |
+| Fallback provider / model | empty | Used when not following the selection, or when nothing is selected. Chosen from a dropdown of the models this profile can actually reach. |
+| Reasoning effort | model default | Only applied when the served model declares it. The dropdown lists exactly the efforts the chosen fallback model declares, plus the model's own default. |
 | Extra system prompt | empty | Prepended only for requests that carry no system message of their own. |
 | Default max output tokens | `8192` | Applied when a request omits `max_tokens`. |
 | Request timeout (ms) | `600000` | Upper bound for one completion, including streaming. |
