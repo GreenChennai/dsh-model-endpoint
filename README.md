@@ -110,6 +110,11 @@ result, and asks the model again — up to **Max tool rounds** (default `8`).
 A turn that hits the limit is cut off with `409 tool_round_limit` rather than
 being retried forever.
 
+Above the switches, **Select all** turns every listed tool on in one write and
+**Clear all** turns them off, so a long tool list does not have to be clicked
+one row at a time. Both write the same `toolSwitches` dictionary the individual
+switches write.
+
 **Granularity, stated honestly.** The switches are **per tool, not per plugin**.
 The Harness registry records a tool's name, description, and parameters; it does
 not record which plugin registered it, and the scope a tool is registered under
@@ -187,7 +192,7 @@ Settings → **Model endpoint**.
 | Fallback provider / model | empty | Used when not following the selection, or when nothing is selected. Chosen from a dropdown of the models this profile can actually reach. |
 | Reasoning effort | model default | Only applied when the served model declares it. The dropdown lists exactly the efforts the chosen fallback model declares, plus the model's own default. |
 | Extra system prompt | empty | Prepended only for requests that carry no system message of their own. |
-| Default max output tokens | `8192` | Applied when a request omits `max_tokens`. |
+| Default max output tokens | `8192` | Applied when a request omits `max_tokens`. `0` means no ceiling of this endpoint's own — the request goes out without a `maxTokens` field and the provider applies its model's own limit. |
 | Request timeout (ms) | `600000` | Upper bound for one completion, including streaming. |
 | Allowed browser origin | `*` | Sent as `Access-Control-Allow-Origin`. |
 | Lend this profile's tools | off | Hand the model the Harness tools switched on below, and run them here. |
