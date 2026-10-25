@@ -153,6 +153,9 @@ The plugin mounts itself, starts its listener, and adds a **Model endpoint** pag
 under Settings. Nothing else is required — the Harness exposes no inbound HTTP
 API of its own, so this plugin owns its listener end to end.
 
+**Minimum version: DeepSeek Harness 0.2.1-rc.2.** Image forwarding requires the
+built-in attachment service introduced in that version.
+
 Verify:
 
 ```sh
@@ -251,6 +254,22 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -d '{"model":"auto","messages":[{"role":"user","content":"hello"}],"stream":true}'
 ```
 
+### Image input
+
+User messages may contain the standard OpenAI Chat Completions image_url part. The endpoint downloads the image into a bounded byte buffer and persists it through the Harness attachment service before handing it to the model; it does not forward image_url to a text-only endpoint.
+
+Supported media types are PNG, JPEG, WebP, and GIF. Remote HTTP(S) URLs must use default ports and resolve exclusively to public IP addresses; DNS results are pinned for each request and redirects are revalidated. Requests allow at most 8 images and 20 MiB total, with an 8 MiB per-image limit; each URL may redirect up to 3 times, with a 15-second timeout per hop. Base64 data: URLs are also supported (the total JSON request body remains subject to the existing 8 MiB limit). Private/local destinations and non-image responses are rejected.
+
+If model metadata explicitly says the selected model does not accept image input, the endpoint returns 400 unsupported_content before downloading. If metadata omits modality information, the endpoint attempts admission and relies on the selected adapter's image support.
+
+Example:
+
+```json
+{"model":"auto","messages":[{"role":"user","content":[{"type":"text","text":"What is in this picture?"},{"type":"image_url","image_url":{"url":"https://example.com/photo.jpg"}}]}]}
+```
+
+---
+
 ### Reaching it from another machine
 
 1. Set **Bind address** to `0.0.0.0` and give the endpoint an **API key**.
@@ -277,16 +296,17 @@ Errors use OpenAI's envelope:
 | Status | Code | Cause |
 |---|---|---|
 | 400 | `invalid_request_error` | Malformed message, role, tool, or body. |
-| 400 | `unsupported_content` | A non-text content part. This endpoint serves text-only models. |
+| 400 | `unsupported_content` | Unsupported content, or metadata explicitly says the selected model does not accept images. If modality metadata is absent, the adapter decides whether it can accept the request. |
 | 401 | `invalid_api_key` | Missing or wrong bearer token. |
 | 404 | `not_found` | No such route. |
 | 404 | `model_not_found` | The requested `model` is not routable. |
 | 405 | `method_not_allowed` | Wrong method for a known route. |
 | 409 | `tool_round_limit` | The model kept calling borrowed tools past **Max tool rounds**. |
-| 413 | `request_too_large` | Body above 8 MiB, or an oversized input. |
+| 413 | `request_too_large` | Body above 8 MiB, or per-image/request-wide image bytes exceed the limit. |
+| 502 | `upstream_error` | Upstream model call or public image URL retrieval failed. |
+| 504 | `request_timeout` | Public image URL retrieval timed out. |
 | 429 | `rate_limit_exceeded` | Upstream provider rate limit. |
 | 429 | `insufficient_quota` | Upstream quota exhausted. |
-| 500 | `upstream_error` | The model call failed without a more specific code. |
 | 503 | `model_unavailable` | Nothing routable could be resolved. |
 
 Upstream failures keep the Harness's own classification, so `AUTH`,
@@ -301,6 +321,9 @@ the codes above rather than being flattened into one generic error.
 cordis.patch.yml    profile entry: id `model-endpoint` — also its settings namespace
 lib/index.js        Host half: the HTTP listener and the OpenAI translation
 lib/client.js       Client half: the settings page
+lib/openai-content.js OpenAI content conversion and attachment admission
+lib/openai-images.js bounded data/remote image reads
+tests/*.test.js      image input and URL safety regression tests
 locale/{en,zh}.json display metadata for the plugin list
 icon.svg            plugin icon
 ```
@@ -318,6 +341,12 @@ Syntax check both halves:
 ```sh
 ELECTRON_RUN_AS_NODE=1 "/path/to/DeepSeek Harness" --check lib/index.js
 ELECTRON_RUN_AS_NODE=1 "/path/to/DeepSeek Harness" --check lib/client.js
+```
+
+Run regression tests:
+
+```sh
+npm test
 ```
 
 Pack:

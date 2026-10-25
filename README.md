@@ -128,6 +128,8 @@ dsh plugin --profile desktop add /absolute/path/to/dist/dsh-model-endpoint-1.0.0
 插件会自行挂载、启动监听器，并在「设置」下添加一个 **Model endpoint** 页面。除此之外无需
 任何东西 —— Harness 自身不暴露任何入站 HTTP API，所以本插件从头到尾拥有自己的监听器。
 
+**最低版本：DeepSeek Harness 0.2.1-rc.2。** 图像转发依赖该版本提供的内置附件服务。
+
 验证：
 
 ```sh
@@ -216,6 +218,22 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -d '{"model":"auto","messages":[{"role":"user","content":"hello"}],"stream":true}'
 ```
 
+### 图像输入
+
+用户消息可使用标准 OpenAI Chat Completions image_url 内容块；端点会把图像下载为有大小上限的字节，再通过 Harness 附件服务持久化后交给模型，不会把 image_url 直接传给文本端点。
+
+支持 PNG、JPEG、WebP、GIF；HTTP(S) URL 仅允许默认端口和公开 IP 目标，DNS 结果会固定到本次请求，重定向会重新校验。每个请求最多 8 张图、累计最多 20 MiB、单张最多 8 MiB；每个 URL 最多 3 次重定向，每跳 15 秒。也支持 base64 data: URL（总 JSON 请求体仍受现有 8 MiB 上限限制）。私有/本地地址和非图像响应会拒绝。
+
+如果模型目录明确声明所选模型不接受 image 输入，端点会在下载前返回 400 unsupported_content。模型元数据没有提供模态信息时，端点会尝试提交图像；最终仍取决于该模型适配器是否支持图像。
+
+示例：
+
+```json
+{"model":"auto","messages":[{"role":"user","content":[{"type":"text","text":"这张图片里有什么？"},{"type":"image_url","image_url":{"url":"https://example.com/photo.jpg"}}]}]}
+```
+
+---
+
 ### 从另一台机器访问
 
 1. 把 **Bind address** 设为 `0.0.0.0`，并给端点设一个 **API key**。
@@ -239,16 +257,17 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 | 状态 | 代码 | 原因 |
 |---|---|---|
 | 400 | `invalid_request_error` | 消息、角色、工具或请求体格式错误。 |
-| 400 | `unsupported_content` | 非文本内容块。本端点服务的是纯文本模型。 |
+| 400 | `unsupported_content` | 内容块不受支持，或元数据明确声明所选模型不接收图像；若元数据未提供模态信息，则尝试提交并由适配器判断。 |
 | 401 | `invalid_api_key` | 缺少或错误的 bearer token。 |
 | 404 | `not_found` | 没有这条路由。 |
 | 404 | `model_not_found` | 请求的 `model` 不可路由。 |
 | 405 | `method_not_allowed` | 对已知路由用了错误的方法。 |
 | 409 | `tool_round_limit` | 模型在超过 **Max tool rounds** 之后仍在调用借出的工具。 |
-| 413 | `request_too_large` | 请求体超过 8 MiB，或输入过大。 |
+| 413 | `request_too_large` | 请求体超过 8 MiB，或单图/请求累计图像字节超限。 |
+| 502 | `upstream_error` | 上游模型调用或公共图像 URL 获取失败。 |
+| 504 | `request_timeout` | 公共图像 URL 获取超时。 |
 | 429 | `rate_limit_exceeded` | 上游提供方限流。 |
 | 429 | `insufficient_quota` | 上游额度耗尽。 |
-| 500 | `upstream_error` | 模型调用失败且没有更具体的代码。 |
 | 503 | `model_unavailable` | 无法解析出任何可路由的目标。 |
 
 上游失败保留 Harness 自己的分类，因此 `AUTH`、`RATE_LIMIT`、`QUOTA`、`ACCOUNT_QUOTA`
@@ -262,6 +281,9 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 cordis.patch.yml    profile 条目：id `model-endpoint` —— 同时也是它的设置命名空间
 lib/index.js        Host 半侧：HTTP 监听器与 OpenAI 转译
 lib/client.js       Client 半侧：设置页
+lib/openai-content.js OpenAI 内容转换与附件接入
+lib/openai-images.js 受限数据 URL/远程图像读取
+tests/*.test.js      图像输入与 URL 安全回归测试
 locale/{en,zh}.json 插件列表用的显示元数据
 icon.svg            插件图标
 ```
@@ -278,6 +300,12 @@ icon.svg            插件图标
 ```sh
 ELECTRON_RUN_AS_NODE=1 "/path/to/DeepSeek Harness" --check lib/index.js
 ELECTRON_RUN_AS_NODE=1 "/path/to/DeepSeek Harness" --check lib/client.js
+```
+
+运行回归测试：
+
+```sh
+npm test
 ```
 
 打包：
